@@ -3,24 +3,24 @@
 #include <avr/interrupt.h>
 
 #define F_CPU 1000000UL
+#define PRESCALER 64
 
-/* Basically we have to get resolution of 1ms, and increment a variable by an interrupt each 1ms.
-    Then, if we get to the desired bpm (e.g. 60 bpm is 1000ms) we turn led on for a brief time.
-
- */
-
-void timer0_init(void);
+static void timer1_init(void);
+static void timer0_init(void);
+/* take bpm as an argument and calculate that to herz */
+static double calculate_herz_from_bpm(uint8_t bpm);
+static uint16_t calculate_ticks_from_herz_16bit(double Hz);
+volatile uint16_t start_ticks = 0; // 60 bpm
+uint8_t bpm;
+volatile double Hz = 0;
 
 int main(void)
 {
     DDRD = (1 << PD0);
     PORTD = (1 << PD0); // HUNDREDS
-    
+
     /* test led */
-
     DDRB = (1 << PB0);
-    // PORTB = (1 << PB0);
-
     /*          */
 
     /* 
@@ -28,8 +28,13 @@ int main(void)
         is set, the Timer/Counter0 overflow interrupt is enabled.  
     */
 
-    TIMSK1 = (1 << TOIE1); // set up Overflow Interupt Enable
-    TCCR1A = (1 << WGM12);  // set up Timer1 CTC. How to set the timer to generate interrupt at TOP val not MAX?
+    /* 8 bit timer, used to ring the buzzer */
+    TIMSK0 = (1 << TOIE0); // Overflow Interrupt Enable
+    TCCR0A = (1 << WGM01); // Set up Timer0 CTC
+    //TCCR0B &= ~(1 << CS02) | ~(1 << CS01) | ~(1 << CS00); // Clear bitfield - turn off timer
+   
+    TIMSK1 = (1 << TOIE1); // Overflow Interupt Enable
+    TCCR1A = (1 << WGM12); // set up Timer1 CTC (Clear Timer on Compare).
     TCCR1B = (1 << CS10) | (1 << CS11); // set up prescaler 64
     /*
         1000000/64/65565 = 0,2383131244 Hz
@@ -37,28 +42,56 @@ int main(void)
         x = 15625
         65565 - 15625 = 49 940 -> number of ticks we have to start from.
     */
-    TCNT1 = 49940;
+    bpm = 60;
+    Hz = calculate_herz_from_bpm(bpm);
+    start_ticks = calculate_ticks_from_herz_16bit(Hz);
+
+    TCNT1 = start_ticks;
+    TCNT0 = 0;
 
     sei(); // Sets SREG bit 7 - I: Global Interrupt Enable
 
     /* Common anode - turn on with a logic 0. */
-
     while (1)
     {
-        
-        // _delay_ms(1000);
+        /* Check if high on pins. */
     }
-    
 }
 
-void timer0_init(void)
+static void timer1_init(void)
 {
+}
+static void timer0_init(void)
+{
+}
 
+static double calculate_herz_from_bpm(uint8_t bpm)
+{
+    return bpm/60.0;
+}
+
+static uint16_t calculate_ticks_from_herz_16bit(double Hz)
+{
+    return UINT16_MAX - (uint16_t)round(1000000/(PRESCALER * Hz));
 }
 
 ISR(TIMER1_OVF_vect)
 {
-    // static volatile int8_t counter = 0;
+    /* When this interrupt starts, it starts another timer setting HIGH on the output pin for a brief moment, to 
+       shortly blink an LED (ultimately setting off a buzzer)
+     */
+
     PORTB ^= (1 << PB0);
-    TCNT1 = 49940;
+    // Start Timer0
+    TCCR0B = (1 << CS01); // Prescaler /8
+
+    /* Update ticks takes bpm and returns ticks */
+    TCNT1 = start_ticks; // value of 16-bit Timer1
+    TCNT0 = 0;
+}
+
+ISR(TIMER0_OVF_vect)
+{
+    PORTB ^= (1 << PB0);
+    TCCR0B &= ~(1 << CS01); // turn off timer
 }
